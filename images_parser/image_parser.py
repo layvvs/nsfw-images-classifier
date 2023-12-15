@@ -6,14 +6,30 @@ from pathlib import Path
 
 
 PROJECT_DIR = Path(__file__).parents[1]
-NSFW_PATH = Path(PROJECT_DIR/'dataset/nsfw')
-NON_NSFW_PATH = Path(PROJECT_DIR/'dataset/non-nsfw')
+NSFW_PATH = Path(PROJECT_DIR/'dataset/raw_data/nsfw')
+NON_NSFW_PATH = Path(PROJECT_DIR/'dataset/raw_data/non-nsfw')
 NON_NSFW_FILE_PATH = Path(PROJECT_DIR/'non-nsfw-websites.txt')
-MEMORY_LIMIT = 4294967296 #4g
-IMAGES_LIMIT = 2500
+NSFW_FILE_PATH = Path(PROJECT_DIR/'nsfw-websites.txt')
+SIZE_LIMIT = 4294967296 #4g
+IMAGES_LIMIT = 85
 PARSER_TYPE = 'lxml'
 
+#TODO: Добавить нормальную обработку исключений, нормальное логирование, улучшить проверку на SIZE_LIMIT, улучшить и интегрировать пагинацию, чтобы не использовать допскрипт для подготовки сайтов
+#TODO: Доработать метод по извлечению url из тегов и последующей проверки, ибо метод get может доставать вообще не ссылку, а просто заглушку
+#TODO: Метод по созданию имени тоже доработать, чтобы он вырезал слеши из конца
+#TODO: Починить SIZE_LIMIT проверку
+# PAGINATOR EXAMPLE:
+# WEB = 'https:...'
 
+# with open('/Users/layvvs/Desktop/thread/nsfw-model/nsfw-websites.txt', 'a') as file:
+#     counter = 1
+#     website_html = BeautifulSoup(requests.get(f'{WEB}/{counter}/').text, 'lxml')
+#     while website_html.find('h1').contents[0] != 'Page not found':
+#         file.writelines(f'{WEB}/{counter}/\n')
+#         print(f'{WEB}/{counter}/ done')
+#         website_html = BeautifulSoup(requests.get(f'{WEB}/{counter}/').text, 'lxml')
+#         counter +=1
+# print('all Done')
 class HTMLParser:
     """
     HTML parser wrapper.
@@ -47,7 +63,7 @@ class FileSystemHelper:
         :param save_path: path where to save the image.
         :param name: name of image.
         """
-        with open(save_path/name, 'wb') as file:
+        with open(save_path/name, 'ab') as file:
             file.write(image)
 
     def create_name(self, website_url: str, image_number: int) -> str:
@@ -59,10 +75,10 @@ class FileSystemHelper:
         :return: A unique name for the image.
         """
         image_name = urlparse(website_url).path[1:].replace('/', '-')
-        return f'{image_name}-{image_number}.png'
+        return f'{image_name}{image_number}.png'
 
 
-class RequestHandler:
+class RequestsHandler: # add an exception handler
     """
     Requests handler
     """
@@ -70,11 +86,17 @@ class RequestHandler:
         """
         This method downloads images from specified url.
 
-        :param image_url
+        :param image_url: image url.
+        :return: image.
         """
         return requests.get(image_url).content
 
     def get_website_html(self, website_url) -> str:
+        """
+        This method returns website html.
+
+        :param website_url: website url. 
+        """
         return requests.get(website_url).text
 
 
@@ -119,7 +141,7 @@ class ImageParser:
     def parse_website_images(self) -> List[str]:
         parsed_page = self.html_parser(self.website_html, self.parser_type)
         image_tags = parsed_page.find_images(self.limit)
-        return [self._pull_url(image_tag) for image_tag in image_tags] 
+        return [self._pull_url(image_tag) for image_tag in image_tags]
 
     def _pull_url(self, image_tag) -> str:
         """
@@ -128,22 +150,29 @@ class ImageParser:
         :param image_tag: <img> tag object.
         :return: image source.
         """
-        return image_tag.get('src', 'data-src')
+        return image_tag.get('data-src', 'src')
     
 
-# TODO: Нормальное логирование, обработка исключений и пагинация, mem limit check
+
 if __name__ == "__main__":
 
     file_system_helper = FileSystemHelper()
-    request_handler = RequestHandler()
+    request_handler = RequestsHandler()
     url_handler = URLHandler()
 
-    for website_url in file_system_helper.pull_websites(NON_NSFW_FILE_PATH):
+    for website_url in file_system_helper.pull_websites(NSFW_FILE_PATH):
+        if NSFW_FILE_PATH.stat().st_size >= SIZE_LIMIT:
+            break
         website_html = request_handler.get_website_html(website_url)
         image_parser = ImageParser(website_html, HTMLParser, PARSER_TYPE, IMAGES_LIMIT)
         for image_number, image_source in enumerate(image_parser.parse_website_images()):
             image_url = url_handler.check_source_url(image_source, website_url)
-            image = request_handler.download_image(image_url)
+            try:
+                image = request_handler.download_image(image_url)
+            except Exception as error:
+                print(f'The problem occurred with {image_url}')
+                continue
             image_name = file_system_helper.create_name(website_url, image_number)
-            file_system_helper.save_image(image, NON_NSFW_PATH, image_name)
-    print(f'{website_url} parsing complete')
+            file_system_helper.save_image(image, NSFW_PATH, image_name)
+        print(f'{website_url} parsing complete')
+            
